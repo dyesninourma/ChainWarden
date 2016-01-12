@@ -22,15 +22,3 @@ organisation is literally "Chainwarden Test PKI".
 1024 bit RSA key and a SHA1 signature so the weak key and weak signature checks
 each have a target. The root and intermediate are ordinary healthy CA
 certificates.
-
-## How they were built
-
-The validity dates are pinned with OpenSSL's `-not_before` and `-not_after`
-flags rather than `-days`, so regenerating the PKI produces the same dates on
-any machine and the certificates stay reproducible. Serial numbers are fixed
-with `-set_serial`.
-
-The exact commands are in `gen_pki.sh` in this directory. In short:
-
-1. Self sign the root with `openssl req -x509`, RSA 2048, SHA256, basic
-   constraints CA:TRUE and key usage keyCertSign, cRLSign, serial 1.
