@@ -53,22 +53,3 @@ basicConstraints=critical,CA:FALSE
 keyUsage=critical,digitalSignature,keyEncipherment
 extendedKeyUsage=serverAuth
 EOF
-openssl x509 -req -in leaf-good.csr \
-  -CA intermediate.pem -CAkey intermediate.key -set_serial 16 \
-  -sha256 -not_before "$GOOD_NB" -not_after "$GOOD_NA" \
-  -extfile ext_leaf.cnf -out leaf-good.pem
-
-# --- leaf-soon (RSA 2048, SHA256, expires close to leaf-good) ---
-openssl req -new -newkey rsa:2048 -nodes \
-  -keyout leaf-soon.key -out leaf-soon.csr \
-  -subj "/C=US/O=Chainwarden Test PKI/CN=soon.example.test"
-openssl x509 -req -in leaf-soon.csr \
-  -CA intermediate.pem -CAkey intermediate.key -set_serial 17 \
-  -sha256 -not_before "$SOON_NB" -not_after "$SOON_NA" \
-  -extfile ext_leaf.cnf -out leaf-soon.pem
-
-# --- leaf-expired (RSA 2048, SHA256, already expired) ---
-openssl req -new -newkey rsa:2048 -nodes \
-  -keyout leaf-expired.key -out leaf-expired.csr \
-  -subj "/C=US/O=Chainwarden Test PKI/CN=expired.example.test"
-openssl x509 -req -in leaf-expired.csr \
