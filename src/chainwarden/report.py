@@ -22,3 +22,15 @@ def render_findings(findings: list[Finding], as_of: date) -> list[str]:
         counts[f.severity] = counts.get(f.severity, 0) + 1
     summary = ", ".join(f"{counts[s]} {s}" for s in ("ERROR", "WARN", "INFO") if s in counts)
     lines.append(f"# {len(findings)} findings: {summary}")
+    return lines
+
+
+def render_chain(chain: Chain) -> list[str]:
+    lines = []
+    status = "complete" if chain.complete else "incomplete"
+    lines.append(f"chain {chain.leaf.common_name} depth={chain.depth} {status}")
+    for i, cert in enumerate(chain.certs):
+        indent = "  " * i
+        role = "root" if cert.is_self_issued else ("leaf" if i == 0 else "ca")
+        lines.append(
+            f"{indent}[{role}] {cert.common_name} "
