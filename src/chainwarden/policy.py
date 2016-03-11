@@ -100,3 +100,105 @@ def check_validity(cert: Certificate, as_of: date, warn_days: int) -> list[Findi
         findings.append(
             Finding(
                 "WARN",
+                "NOT_YET_VALID",
+                cert.subject,
+                f"not valid for another {days} days, starts "
+                f"{cert.not_before.date().isoformat()}",
+            )
+        )
+    else:
+        remaining = (cert.not_after - now).days
+        if remaining <= warn_days:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "EXPIRING_SOON",
+                    cert.subject,
+                    f"expires in {remaining} days on "
+                    f"{cert.not_after.date().isoformat()}",
+                )
+            )
+    return findings
+
+
+def check_constraints(cert: Certificate) -> list[Finding]:
+    """Basic constraints and key usage sanity, per RFC 5280 section 4.2.1."""
+    findings = []
+    bc = cert.basic_constraints
+    if bc.ca:
+        # A CA that signs certificates should assert keyCertSign.
+        if cert.key_usage and "keyCertSign" not in cert.key_usage:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "CA_NO_CERTSIGN",
+                    cert.subject,
+                    "basic constraints say CA but keyCertSign is not set",
+                )
+            )
+    else:
+        # A non CA that still asserts keyCertSign is a misconfiguration.
+        if "keyCertSign" in cert.key_usage:
+            findings.append(
+                Finding(
+                    "ERROR",
+                    "LEAF_CERTSIGN",
+                    cert.subject,
+                    "not a CA but keyCertSign is set",
+                )
+            )
+    if bc.present and bc.ca and not bc.critical:
+        findings.append(
+            Finding(
+                "WARN",
+                "BC_NOT_CRITICAL",
+                cert.subject,
+                "basic constraints CA:TRUE should be marked critical",
+            )
+        )
+    return findings
+
+
+def check_chain(chain: Chain) -> list[Finding]:
+    findings = []
+    if not chain.complete:
+        findings.append(
+            Finding(
+                "ERROR",
+                "CHAIN_INCOMPLETE",
+                chain.leaf.subject,
+                "no path to a self signed root in the pool, top reached is "
+                f"issuer {chain.anchor.issuer}",
+            )
+        )
+    # Enforce pathlen on intermediates: count of certs below a CA must not
+    # exceed its pathlen constraint.
+    for depth, cert in enumerate(chain.certs):
+        bc = cert.basic_constraints
+        if bc.ca and bc.path_len is not None:
+            below = depth  # number of certs beneath this CA in the chain
+            allowed = bc.path_len + 1
+            if below > allowed:
+                findings.append(
+                    Finding(
+                        "ERROR",
+                        "PATHLEN_EXCEEDED",
+                        cert.subject,
+                        f"pathlen {bc.path_len} exceeded, {below} "
+                        "certificates appear below this CA",
+                    )
+                )
+    return findings
+
+
+def check_expiry_cliff(
+    certs: list[Certificate],
+    window_days: int,
+    min_count: int,
+) -> list[Finding]:
+    """Group certificates by expiry into buckets of window_days and flag any
+    bucket with min_count or more members. Buckets are anchored at the earliest
+    not_after so results are stable and independent of as_of."""
+    findings = []
+    dated = sorted(certs, key=lambda c: c.not_after)
+    if not dated:
