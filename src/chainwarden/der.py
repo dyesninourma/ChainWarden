@@ -23,28 +23,3 @@ class DERError(ValueError):
 TAG_BOOLEAN = 0x01
 TAG_INTEGER = 0x02
 TAG_BIT_STRING = 0x03
-TAG_OCTET_STRING = 0x04
-TAG_NULL = 0x05
-TAG_OID = 0x06
-TAG_UTF8_STRING = 0x0C
-TAG_SEQUENCE = 0x30
-TAG_SET = 0x31
-TAG_PRINTABLE_STRING = 0x13
-TAG_IA5_STRING = 0x16
-TAG_UTC_TIME = 0x17
-TAG_GENERALIZED_TIME = 0x18
-
-
-@dataclass(frozen=True)
-class TLV:
-    """One tag-length-value triple parsed from a DER buffer."""
-
-    tag: int
-    # Byte offset of the value (content), relative to the buffer start.
-    value_start: int
-    # Length of the value in bytes.
-    length: int
-    # The raw content bytes.
-    value: bytes
-    # Byte offset just past this TLV, useful when walking siblings.
-    end: int
