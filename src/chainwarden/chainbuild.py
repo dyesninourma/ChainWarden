@@ -48,28 +48,3 @@ class Chain:
 def _subject_index(certs: list[Certificate]) -> dict[str, list[Certificate]]:
     index: dict[str, list[Certificate]] = {}
     for cert in certs:
-        index.setdefault(cert.subject, []).append(cert)
-    return index
-
-
-def find_leaves(certs: list[Certificate]) -> list[Certificate]:
-    """Leaves are certificates that no other certificate is issued by, that is
-    their subject is not the issuer of anything else, and that are not self
-    signed. Order follows the input order for determinism."""
-    issued_subjects = set()
-    for cert in certs:
-        for other in certs:
-            if other is cert:
-                continue
-            if other.issuer == cert.subject and not cert.is_self_issued:
-                issued_subjects.add(cert.subject)
-                break
-    leaves = []
-    for cert in certs:
-        if cert.is_self_issued:
-            continue
-        if cert.subject not in issued_subjects:
-            leaves.append(cert)
-    return leaves
-
-
