@@ -23,28 +23,3 @@ class Chain:
     """An assembled chain from a leaf up toward a root.
 
     certs[0] is the leaf. The last element is either a self signed root or the
-    highest certificate we could reach. complete is True only when the last
-    element is self signed (a root anchor present in the pool)."""
-
-    certs: list[Certificate]
-
-    @property
-    def leaf(self) -> Certificate:
-        return self.certs[0]
-
-    @property
-    def anchor(self) -> Certificate:
-        return self.certs[-1]
-
-    @property
-    def complete(self) -> bool:
-        return self.anchor.is_self_issued
-
-    @property
-    def depth(self) -> int:
-        return len(self.certs)
-
-
-def _subject_index(certs: list[Certificate]) -> dict[str, list[Certificate]]:
-    index: dict[str, list[Certificate]] = {}
-    for cert in certs:

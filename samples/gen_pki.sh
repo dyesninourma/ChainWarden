@@ -35,21 +35,3 @@ openssl req -new -newkey rsa:2048 -nodes \
   -subj "/C=US/O=Chainwarden Test PKI/CN=Chainwarden Test Intermediate CA"
 
 cat > ext_int.cnf <<'EOF'
-basicConstraints=critical,CA:TRUE,pathlen:0
-keyUsage=critical,keyCertSign,cRLSign
-EOF
-
-openssl x509 -req -in intermediate.csr \
-  -CA root.pem -CAkey root.key -set_serial 2 \
-  -sha256 -not_before "$INT_NB" -not_after "$INT_NA" \
-  -extfile ext_int.cnf -out intermediate.pem
-
-# --- leaf-good (RSA 2048, SHA256) ---
-openssl req -new -newkey rsa:2048 -nodes \
-  -keyout leaf-good.key -out leaf-good.csr \
-  -subj "/C=US/O=Chainwarden Test PKI/CN=good.example.test"
-cat > ext_leaf.cnf <<'EOF'
-basicConstraints=critical,CA:FALSE
-keyUsage=critical,digitalSignature,keyEncipherment
-extendedKeyUsage=serverAuth
-EOF
