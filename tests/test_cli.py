@@ -15,3 +15,20 @@ def _run(argv):
     return code, buf.getvalue()
 
 
+class TestCLI(unittest.TestCase):
+    def test_version_exit_zero(self):
+        code, out = _run(["version"])
+        self.assertEqual(code, 0)
+        self.assertIn("chainwarden", out)
+
+    def test_audit_returns_one_when_findings(self):
+        code, out = _run(["audit", SAMPLES, "--as-of", "2026-09-02"])
+        self.assertEqual(code, 1)
+        self.assertIn("EXPIRED", out)
+        self.assertIn("WEAK_KEY", out)
+
+    def test_chain_lists_four_leaves(self):
+        code, out = _run(["chain", SAMPLES])
+        self.assertEqual(out.count("chain "), 4)
+        self.assertEqual(code, 0)
+

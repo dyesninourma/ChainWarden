@@ -23,28 +23,3 @@ _SUFFIX = "-----"
 
 class PEMError(ValueError):
     """Raised when a PEM block is malformed."""
-
-
-@dataclass(frozen=True)
-class PEMBlock:
-    label: str
-    der: bytes
-
-
-def split_blocks(text: str) -> list[PEMBlock]:
-    """Return every well formed PEM block in text, in file order.
-
-    Lines outside BEGIN/END markers are ignored, which matches how real PEM
-    bundles carry human readable headers between certificates.
-    """
-    blocks: list[PEMBlock] = []
-    lines = text.splitlines()
-    i = 0
-    n = len(lines)
-    while i < n:
-        line = lines[i].strip()
-        if line.startswith(_BEGIN) and line.endswith(_SUFFIX):
-            label = line[len(_BEGIN) : -len(_SUFFIX)]
-            end_marker = f"{_END}{label}{_SUFFIX}"
-            body: list[str] = []
-            i += 1
