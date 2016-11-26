@@ -73,3 +73,28 @@ def read_tlv(buf: bytes, offset: int = 0) -> TLV:
         length = int.from_bytes(buf[pos : pos + num], "big")
         pos += num
     value_start = pos
+    end = value_start + length
+    if end > len(buf):
+        raise DERError("value runs past end of buffer")
+    return TLV(tag, value_start, length, buf[value_start:end], end)
+
+
+def read_children(tlv: TLV, buf: bytes) -> list[TLV]:
+    """Parse the direct children of a constructed TLV (SEQUENCE or SET)."""
+    children: list[TLV] = []
+    pos = tlv.value_start
+    end = tlv.value_start + tlv.length
+    while pos < end:
+        child = read_tlv(buf, pos)
+        children.append(child)
+        pos = child.end
+    return children
+
+
+def decode_oid(value: bytes) -> str:
+    """Decode an OID content octets into dotted decimal string."""
+    if not value:
+        raise DERError("empty OID")
+    first = value[0]
+    arcs = [str(first // 40), str(first % 40)]
+    acc = 0

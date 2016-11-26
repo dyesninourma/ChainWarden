@@ -17,22 +17,3 @@ class TestDER(unittest.TestCase):
         payload = b"\x00" * 258
         buf = bytes([0x04, 0x82, 0x01, 0x02]) + payload
         tlv = der.read_tlv(buf)
-        self.assertEqual(tlv.length, 258)
-        self.assertEqual(len(tlv.value), 258)
-
-    def test_indefinite_length_rejected(self):
-        with self.assertRaises(der.DERError):
-            der.read_tlv(bytes([0x30, 0x80]))
-
-    def test_value_past_end_rejected(self):
-        with self.assertRaises(der.DERError):
-            der.read_tlv(bytes([0x02, 0x05, 0x01]))
-
-    def test_read_children(self):
-        # SEQUENCE { INTEGER 1, INTEGER 2 }
-        buf = bytes([0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02])
-        seq = der.read_tlv(buf)
-        kids = der.read_children(seq, buf)
-        self.assertEqual(len(kids), 2)
-        self.assertEqual(der.decode_integer(kids[0].value), 1)
-        self.assertEqual(der.decode_integer(kids[1].value), 2)
