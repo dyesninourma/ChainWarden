@@ -16,22 +16,3 @@ cd "$(dirname "$0")"
 ROOT_NB=20240101000000Z; ROOT_NA=20340101000000Z
 INT_NB=20240101000000Z;  INT_NA=20320101000000Z
 GOOD_NB=20250101000000Z; GOOD_NA=20270101000000Z
-SOON_NB=20250101000000Z; SOON_NA=20261001000000Z
-EXP_NB=20230101000000Z;  EXP_NA=20240601000000Z
-WEAK_NB=20250101000000Z; WEAK_NA=20280101000000Z
-
-# --- root CA (RSA 2048, SHA256, self signed) ---
-openssl req -x509 -new -newkey rsa:2048 -nodes \
-  -keyout root.key -out root.pem \
-  -sha256 -not_before "$ROOT_NB" -not_after "$ROOT_NA" \
-  -subj "/C=US/O=Chainwarden Test PKI/CN=Chainwarden Test Root CA" \
-  -addext "basicConstraints=critical,CA:TRUE" \
-  -addext "keyUsage=critical,keyCertSign,cRLSign" \
-  -set_serial 1
-
-# --- intermediate CA key and CSR ---
-openssl req -new -newkey rsa:2048 -nodes \
-  -keyout intermediate.key -out intermediate.csr \
-  -subj "/C=US/O=Chainwarden Test PKI/CN=Chainwarden Test Intermediate CA"
-
-cat > ext_int.cnf <<'EOF'
