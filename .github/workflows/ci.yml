@@ -7,3 +7,12 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Audit the sample bundle
+        run: PYTHONPATH=src python -m chainwarden audit samples --as-of 2026-09-02 || test $? -eq 1
