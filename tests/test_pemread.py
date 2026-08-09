@@ -10,3 +10,39 @@ def _wrap(label: str, data: bytes) -> str:
     return f"-----BEGIN {label}-----\n" + "\n".join(lines) + f"\n-----END {label}-----\n"
 
 
+class TestPEMRead(unittest.TestCase):
+    def test_single_block(self):
+        text = _wrap("CERTIFICATE", b"\x30\x03\x02\x01\x05")
+        blocks = pemread.split_blocks(text)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].label, "CERTIFICATE")
+        self.assertEqual(blocks[0].der, b"\x30\x03\x02\x01\x05")
+
+    def test_certificate_ders_filters_labels(self):
+        text = _wrap("CERTIFICATE", b"AAAA") + _wrap("PRIVATE KEY", b"BBBB")
+        ders = pemread.certificate_ders(text)
+        self.assertEqual(ders, [b"AAAA"])
+
+    def test_headers_between_blocks_ignored(self):
+        text = (
+            "subject=CN=one\n"
+            + _wrap("CERTIFICATE", b"\x01\x02")
+            + "subject=CN=two\n"
+            + _wrap("CERTIFICATE", b"\x03\x04")
+        )
+        ders = pemread.certificate_ders(text)
+        self.assertEqual(ders, [b"\x01\x02", b"\x03\x04"])
+
+    def test_unterminated_block_raises(self):
+        text = "-----BEGIN CERTIFICATE-----\nAAAA\n"
+        with self.assertRaises(pemread.PEMError):
+            pemread.split_blocks(text)
+
+    def test_bad_base64_raises(self):
+        text = "-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n"
+        with self.assertRaises(pemread.PEMError):
+            pemread.split_blocks(text)
+
+
+if __name__ == "__main__":
+    unittest.main()
