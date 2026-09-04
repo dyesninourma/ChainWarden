@@ -23,3 +23,104 @@ class DERError(ValueError):
 TAG_BOOLEAN = 0x01
 TAG_INTEGER = 0x02
 TAG_BIT_STRING = 0x03
+TAG_OCTET_STRING = 0x04
+TAG_NULL = 0x05
+TAG_OID = 0x06
+TAG_UTF8_STRING = 0x0C
+TAG_SEQUENCE = 0x30
+TAG_SET = 0x31
+TAG_PRINTABLE_STRING = 0x13
+TAG_IA5_STRING = 0x16
+TAG_UTC_TIME = 0x17
+TAG_GENERALIZED_TIME = 0x18
+
+
+@dataclass(frozen=True)
+class TLV:
+    """One tag-length-value triple parsed from a DER buffer."""
+
+    tag: int
+    # Byte offset of the value (content), relative to the buffer start.
+    value_start: int
+    # Length of the value in bytes.
+    length: int
+    # The raw content bytes.
+    value: bytes
+    # Byte offset just past this TLV, useful when walking siblings.
+    end: int
+
+
+def read_tlv(buf: bytes, offset: int = 0) -> TLV:
+    """Read one TLV starting at offset. Rejects indefinite lengths."""
+    if offset >= len(buf):
+        raise DERError("read past end of buffer")
+    tag = buf[offset]
+    pos = offset + 1
+    if pos >= len(buf):
+        raise DERError("truncated length")
+    first = buf[pos]
+    pos += 1
+    if first < 0x80:
+        length = first
+    elif first == 0x80:
+        raise DERError("indefinite length is not valid DER")
+    else:
+        num = first & 0x7F
+        if num > 4:
+            raise DERError("length field too large")
+        if pos + num > len(buf):
+            raise DERError("truncated long length")
+        length = int.from_bytes(buf[pos : pos + num], "big")
+        pos += num
+    value_start = pos
+    end = value_start + length
+    if end > len(buf):
+        raise DERError("value runs past end of buffer")
+    return TLV(tag, value_start, length, buf[value_start:end], end)
+
+
+def read_children(tlv: TLV, buf: bytes) -> list[TLV]:
+    """Parse the direct children of a constructed TLV (SEQUENCE or SET)."""
+    children: list[TLV] = []
+    pos = tlv.value_start
+    end = tlv.value_start + tlv.length
+    while pos < end:
+        child = read_tlv(buf, pos)
+        children.append(child)
+        pos = child.end
+    return children
+
+
+def decode_oid(value: bytes) -> str:
+    """Decode an OID content octets into dotted decimal string."""
+    if not value:
+        raise DERError("empty OID")
+    first = value[0]
+    arcs = [str(first // 40), str(first % 40)]
+    acc = 0
+    for i, byte in enumerate(value[1:], start=1):
+        acc = (acc << 7) | (byte & 0x7F)
+        if not byte & 0x80:
+            arcs.append(str(acc))
+            acc = 0
+        elif i == len(value) - 1:
+            raise DERError("OID ends mid subidentifier")
+    return ".".join(arcs)
+
+
+def decode_integer(value: bytes) -> int:
+    """Decode a DER INTEGER (two's complement, big endian)."""
+    if not value:
+        raise DERError("empty INTEGER")
+    return int.from_bytes(value, "big", signed=True)
+
+
+def integer_bit_length(value: bytes) -> int:
+    """Bit length of a non negative DER INTEGER content, ignoring a leading
+    0x00 pad byte. Used to size RSA moduli."""
+    data = value
+    if data and data[0] == 0x00:
+        data = data[1:]
+    if not data:
+        return 0
+    return (len(data) - 1) * 8 + data[0].bit_length()
