@@ -183,3 +183,188 @@ def _parse_name(name_tlv: TLV, buf: bytes) -> str:
 
 def _alg_oid(alg_tlv: TLV, buf: bytes) -> str:
     children = der.read_children(alg_tlv, buf)
+    if not children or children[0].tag != der.TAG_OID:
+        raise CertParseError("AlgorithmIdentifier missing OID")
+    return der.decode_oid(children[0].value)
+
+
+def _parse_spki(spki: TLV, buf: bytes) -> tuple[str, int | None]:
+    """Return (pubkey_alg_oid, rsa_modulus_bits or None)."""
+    children = der.read_children(spki, buf)
+    if len(children) < 2:
+        raise CertParseError("SubjectPublicKeyInfo malformed")
+    alg_oid = _alg_oid(children[0], buf)
+    modulus_bits: int | None = None
+    if alg_oid == "1.2.840.113549.1.1.1":  # rsaEncryption
+        bit_string = children[1]
+        if bit_string.tag != der.TAG_BIT_STRING or not bit_string.value:
+            raise CertParseError("RSA public key BIT STRING malformed")
+        # First byte of a BIT STRING is the count of unused bits.
+        rsa_key_der = bit_string.value[1:]
+        seq = der.read_tlv(rsa_key_der, 0)
+        parts = der.read_children(seq, rsa_key_der)
+        if not parts or parts[0].tag != der.TAG_INTEGER:
+            raise CertParseError("RSA modulus missing")
+        modulus_bits = der.integer_bit_length(parts[0].value)
+    return alg_oid, modulus_bits
+
+
+def _parse_extensions(ext_tlv: TLV, buf: bytes, cert_fields: dict) -> None:
+    # ext_tlv is the [3] EXPLICIT wrapper; its single child is the SEQUENCE.
+    inner = der.read_children(ext_tlv, buf)
+    if not inner:
+        return
+    for ext in der.read_children(inner[0], buf):
+        parts = der.read_children(ext, buf)
+        if not parts:
+            continue
+        oid = der.decode_oid(parts[0].value)
+        idx = 1
+        critical = False
+        if idx < len(parts) and parts[idx].tag == der.TAG_BOOLEAN:
+            critical = parts[idx].value != b"\x00"
+            idx += 1
+        if idx >= len(parts):
+            continue
+        ext_value = parts[idx].value  # OCTET STRING content
+        if oid == EXT_BASIC_CONSTRAINTS:
+            cert_fields["basic_constraints"] = _parse_basic_constraints(
+                ext_value, critical
+            )
+        elif oid == EXT_KEY_USAGE:
+            cert_fields["key_usage"] = _parse_key_usage(ext_value)
+        elif oid == EXT_EXT_KEY_USAGE:
+            cert_fields["ext_key_usage"] = _parse_ext_key_usage(ext_value)
+        elif oid == EXT_SUBJECT_ALT_NAME:
+            cert_fields["subject_alt_names"] = _parse_san(ext_value)
+
+
+def _parse_basic_constraints(value: bytes, critical: bool) -> BasicConstraints:
+    seq = der.read_tlv(value, 0)
+    ca = False
+    path_len = None
+    for child in der.read_children(seq, value):
+        if child.tag == der.TAG_BOOLEAN:
+            ca = child.value != b"\x00"
+        elif child.tag == der.TAG_INTEGER:
+            path_len = der.decode_integer(child.value)
+    return BasicConstraints(
+        present=True, critical=critical, ca=ca, path_len=path_len
+    )
+
+
+def _parse_key_usage(value: bytes) -> list[str]:
+    bit = der.read_tlv(value, 0)
+    if bit.tag != der.TAG_BIT_STRING or not bit.value:
+        return []
+    unused = bit.value[0]
+    data = bit.value[1:]
+    bits: list[str] = []
+    total = len(data) * 8 - unused
+    for i in range(total):
+        byte = data[i // 8]
+        if byte & (0x80 >> (i % 8)):
+            if i < len(KEY_USAGE_BITS):
+                bits.append(KEY_USAGE_BITS[i])
+    return bits
+
+
+def _parse_ext_key_usage(value: bytes) -> list[str]:
+    seq = der.read_tlv(value, 0)
+    eku_names = {
+        "1.3.6.1.5.5.7.3.1": "serverAuth",
+        "1.3.6.1.5.5.7.3.2": "clientAuth",
+        "1.3.6.1.5.5.7.3.3": "codeSigning",
+        "1.3.6.1.5.5.7.3.4": "emailProtection",
+        "1.3.6.1.5.5.7.3.8": "timeStamping",
+        "1.3.6.1.5.5.7.3.9": "OCSPSigning",
+    }
+    out: list[str] = []
+    for child in der.read_children(seq, value):
+        if child.tag == der.TAG_OID:
+            oid = der.decode_oid(child.value)
+            out.append(eku_names.get(oid, oid))
+    return out
+
+
+def _parse_san(value: bytes) -> list[str]:
+    seq = der.read_tlv(value, 0)
+    names: list[str] = []
+    for child in der.read_children(seq, value):
+        # dNSName is context tag [2], IA5String content.
+        if child.tag == 0x82:
+            names.append(child.value.decode("ascii", errors="replace"))
+    return names
+
+
+def parse_certificate(data: bytes, source: str = "") -> Certificate:
+    """Parse a DER encoded certificate into a Certificate."""
+    outer = der.read_tlv(data, 0)
+    if outer.tag != der.TAG_SEQUENCE:
+        raise CertParseError("certificate is not a SEQUENCE")
+    top = der.read_children(outer, data)
+    if len(top) != 3:
+        raise CertParseError("certificate must have three top level fields")
+    tbs = top[0]
+    tbs_children = der.read_children(tbs, data)
+
+    idx = 0
+    # Optional [0] EXPLICIT version.
+    if tbs_children and tbs_children[0].tag == 0xA0:
+        idx = 1
+    serial_tlv = tbs_children[idx]
+    if serial_tlv.tag != der.TAG_INTEGER:
+        raise CertParseError("serial is not an INTEGER")
+    serial = der.decode_integer(serial_tlv.value)
+    idx += 1
+
+    _tbs_sig_alg = tbs_children[idx]
+    idx += 1
+    issuer = _parse_name(tbs_children[idx], data)
+    idx += 1
+
+    validity = tbs_children[idx]
+    idx += 1
+    vparts = der.read_children(validity, data)
+    if len(vparts) != 2:
+        raise CertParseError("validity must have two times")
+    not_before = _parse_time(vparts[0])
+    not_after = _parse_time(vparts[1])
+
+    subject = _parse_name(tbs_children[idx], data)
+    idx += 1
+    spki = tbs_children[idx]
+    idx += 1
+    pubkey_alg_oid, rsa_bits = _parse_spki(spki, data)
+
+    # signatureAlgorithm is the second top level field.
+    sig_alg_oid = _alg_oid(top[1], data)
+
+    cert_fields: dict = {
+        "basic_constraints": BasicConstraints(),
+        "key_usage": [],
+        "ext_key_usage": [],
+        "subject_alt_names": [],
+    }
+    for child in tbs_children[idx:]:
+        if child.tag == 0xA3:  # [3] EXPLICIT extensions
+            _parse_extensions(child, data, cert_fields)
+
+    fp = hashlib.sha256(data).hexdigest()
+
+    return Certificate(
+        subject=subject,
+        issuer=issuer,
+        serial=serial,
+        not_before=not_before,
+        not_after=not_after,
+        sig_alg_oid=sig_alg_oid,
+        pubkey_alg_oid=pubkey_alg_oid,
+        rsa_modulus_bits=rsa_bits,
+        basic_constraints=cert_fields["basic_constraints"],
+        key_usage=cert_fields["key_usage"],
+        ext_key_usage=cert_fields["ext_key_usage"],
+        subject_alt_names=cert_fields["subject_alt_names"],
+        fingerprint_sha256=fp,
+        source=source,
+    )
