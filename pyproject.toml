@@ -2,3 +2,21 @@
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "chainwarden"
+version = "0.1.0"
+description = "Offline X.509 and TLS certificate fleet lifecycle auditor."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "the chainwarden authors" }]
+keywords = ["x509", "tls", "certificate", "pki", "audit"]
+
+[project.scripts]
+chainwarden = "chainwarden.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
