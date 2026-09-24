@@ -49,3 +49,207 @@ class Finding:
 
 def _as_datetime(as_of: date) -> datetime:
     return datetime(as_of.year, as_of.month, as_of.day, tzinfo=timezone.utc)
+
+
+def check_weak_signature(cert: Certificate) -> list[Finding]:
+    findings = []
+    reason = WEAK_SIG_OIDS.get(cert.sig_alg_oid)
+    if reason:
+        findings.append(
+            Finding(
+                "ERROR",
+                "WEAK_SIG",
+                cert.subject,
+                f"weak signature algorithm {cert.sig_alg_name} ({reason})",
+            )
+        )
+    return findings
+
+
+def check_weak_key(cert: Certificate) -> list[Finding]:
+    findings = []
+    if cert.rsa_modulus_bits is not None and cert.rsa_modulus_bits < MIN_RSA_BITS:
+        findings.append(
+            Finding(
+                "ERROR",
+                "WEAK_KEY",
+                cert.subject,
+                f"RSA key size {cert.rsa_modulus_bits} bits is below the "
+                f"{MIN_RSA_BITS} bit minimum",
+            )
+        )
+    return findings
+
+
+def check_validity(cert: Certificate, as_of: date, warn_days: int) -> list[Finding]:
+    findings = []
+    now = _as_datetime(as_of)
+    if cert.not_after < now:
+        days = (now - cert.not_after).days
+        findings.append(
+            Finding(
+                "ERROR",
+                "EXPIRED",
+                cert.subject,
+                f"expired {days} days ago on "
+                f"{cert.not_after.date().isoformat()}",
+            )
+        )
+    elif cert.not_before > now:
+        days = (cert.not_before - now).days
+        findings.append(
+            Finding(
+                "WARN",
+                "NOT_YET_VALID",
+                cert.subject,
+                f"not valid for another {days} days, starts "
+                f"{cert.not_before.date().isoformat()}",
+            )
+        )
+    else:
+        remaining = (cert.not_after - now).days
+        if remaining <= warn_days:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "EXPIRING_SOON",
+                    cert.subject,
+                    f"expires in {remaining} days on "
+                    f"{cert.not_after.date().isoformat()}",
+                )
+            )
+    return findings
+
+
+def check_constraints(cert: Certificate) -> list[Finding]:
+    """Basic constraints and key usage sanity, per RFC 5280 section 4.2.1."""
+    findings = []
+    bc = cert.basic_constraints
+    if bc.ca:
+        # A CA that signs certificates should assert keyCertSign.
+        if cert.key_usage and "keyCertSign" not in cert.key_usage:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "CA_NO_CERTSIGN",
+                    cert.subject,
+                    "basic constraints say CA but keyCertSign is not set",
+                )
+            )
+    else:
+        # A non CA that still asserts keyCertSign is a misconfiguration.
+        if "keyCertSign" in cert.key_usage:
+            findings.append(
+                Finding(
+                    "ERROR",
+                    "LEAF_CERTSIGN",
+                    cert.subject,
+                    "not a CA but keyCertSign is set",
+                )
+            )
+    if bc.present and bc.ca and not bc.critical:
+        findings.append(
+            Finding(
+                "WARN",
+                "BC_NOT_CRITICAL",
+                cert.subject,
+                "basic constraints CA:TRUE should be marked critical",
+            )
+        )
+    return findings
+
+
+def check_chain(chain: Chain) -> list[Finding]:
+    findings = []
+    if not chain.complete:
+        findings.append(
+            Finding(
+                "ERROR",
+                "CHAIN_INCOMPLETE",
+                chain.leaf.subject,
+                "no path to a self signed root in the pool, top reached is "
+                f"issuer {chain.anchor.issuer}",
+            )
+        )
+    # Enforce pathlen on intermediates: count of certs below a CA must not
+    # exceed its pathlen constraint.
+    for depth, cert in enumerate(chain.certs):
+        bc = cert.basic_constraints
+        if bc.ca and bc.path_len is not None:
+            below = depth  # number of certs beneath this CA in the chain
+            allowed = bc.path_len + 1
+            if below > allowed:
+                findings.append(
+                    Finding(
+                        "ERROR",
+                        "PATHLEN_EXCEEDED",
+                        cert.subject,
+                        f"pathlen {bc.path_len} exceeded, {below} "
+                        "certificates appear below this CA",
+                    )
+                )
+    return findings
+
+
+def check_expiry_cliff(
+    certs: list[Certificate],
+    window_days: int,
+    min_count: int,
+) -> list[Finding]:
+    """Group certificates by expiry into buckets of window_days and flag any
+    bucket with min_count or more members. Buckets are anchored at the earliest
+    not_after so results are stable and independent of as_of."""
+    findings = []
+    dated = sorted(certs, key=lambda c: c.not_after)
+    if not dated:
+        return findings
+    base = dated[0].not_after
+    buckets: dict[int, list[Certificate]] = {}
+    for cert in dated:
+        offset = (cert.not_after - base).days
+        bucket = offset // window_days
+        buckets.setdefault(bucket, []).append(cert)
+    for bucket in sorted(buckets):
+        members = buckets[bucket]
+        if len(members) >= min_count:
+            lo = members[0].not_after.date().isoformat()
+            hi = members[-1].not_after.date().isoformat()
+            findings.append(
+                Finding(
+                    "WARN",
+                    "EXPIRY_CLIFF",
+                    "(fleet)",
+                    f"{len(members)} certificates expire between {lo} and "
+                    f"{hi}, within a {window_days} day window",
+                )
+            )
+    return findings
+
+
+@dataclass
+class AuditConfig:
+    as_of: date
+    expiry_warn_days: int = DEFAULT_EXPIRY_WARN_DAYS
+    cliff_window_days: int = DEFAULT_CLIFF_WINDOW_DAYS
+    cliff_count: int = DEFAULT_CLIFF_COUNT
+
+
+def run_audit(
+    certs: list[Certificate],
+    chains: list[Chain],
+    config: AuditConfig,
+) -> list[Finding]:
+    """Run every check and return findings sorted deterministically."""
+    findings: list[Finding] = []
+    for cert in certs:
+        findings.extend(check_weak_signature(cert))
+        findings.extend(check_weak_key(cert))
+        findings.extend(check_validity(cert, config.as_of, config.expiry_warn_days))
+        findings.extend(check_constraints(cert))
+    for chain in chains:
+        findings.extend(check_chain(chain))
+    findings.extend(
+        check_expiry_cliff(certs, config.cliff_window_days, config.cliff_count)
+    )
+    findings.sort(key=lambda f: f.sort_key())
+    return findings
