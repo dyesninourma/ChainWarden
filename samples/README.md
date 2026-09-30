@@ -10,3 +10,52 @@ organisation is literally "Chainwarden Test PKI".
 
 | File               | Role         | Key        | Signature              | notAfter    |
 |--------------------|--------------|------------|------------------------|-------------|
+| `root.pem`         | root CA      | RSA 2048   | sha256WithRSAEncryption| 2034-01-01  |
+| `intermediate.pem` | intermediate | RSA 2048   | sha256WithRSAEncryption| 2032-01-01  |
+| `leaf-good.pem`    | leaf         | RSA 2048   | sha256WithRSAEncryption| 2027-01-01  |
+| `leaf-soon.pem`    | leaf         | RSA 2048   | sha256WithRSAEncryption| 2026-10-01  |
+| `leaf-expired.pem` | leaf         | RSA 2048   | sha256WithRSAEncryption| 2024-06-01  |
+| `leaf-weak.pem`    | leaf         | RSA 1024   | sha1WithRSAEncryption  | 2028-01-01  |
+| `bundle.pem`       | all six certs concatenated, in the order above                |
+
+`leaf-expired.pem` is already past its notAfter. `leaf-weak.pem` uses both a
+1024 bit RSA key and a SHA1 signature so the weak key and weak signature checks
+each have a target. The root and intermediate are ordinary healthy CA
+certificates.
+
+## How they were built
+
+The validity dates are pinned with OpenSSL's `-not_before` and `-not_after`
+flags rather than `-days`, so regenerating the PKI produces the same dates on
+any machine and the certificates stay reproducible. Serial numbers are fixed
+with `-set_serial`.
+
+The exact commands are in `gen_pki.sh` in this directory. In short:
+
+1. Self sign the root with `openssl req -x509`, RSA 2048, SHA256, basic
+   constraints CA:TRUE and key usage keyCertSign, cRLSign, serial 1.
+2. Create the intermediate key and CSR, then sign it with the root using
+   `openssl x509 -req`, basic constraints CA:TRUE pathlen:0, serial 2.
+3. Create each leaf key and CSR, then sign with the intermediate. The good,
+   soon, and expired leaves use SHA256 and RSA 2048. The weak leaf uses RSA
+   1024 and is signed with `-sha1`.
+4. Concatenate all six into `bundle.pem`.
+5. Delete every `.key` and `.csr` file.
+
+`openssl.cnf` here is a two line minimal config only present because this
+OpenSSL build looks for a default config file that does not exist on the build
+machine. It defines an empty distinguished name section and nothing else.
+
+## Regenerating
+
+With OpenSSL on PATH:
+
+```
+sh samples/gen_pki.sh
+```
+
+The private keys are intentionally not committed, so you cannot re sign or
+extend these certificates from the repository alone. Regeneration produces a
+fresh keypair for each certificate. The subjects, dates, serials, key sizes,
+and signature algorithms stay identical because those are all pinned in the
+script. The SHA256 fingerprints will differ because the public keys differ.
