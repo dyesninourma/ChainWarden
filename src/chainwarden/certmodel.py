@@ -130,36 +130,31 @@ class Certificate:
         return self.subject
 
 
+def _digits(text: str, field: str) -> int:
+    if not text.isdigit():
+        raise CertParseError(f"{field}: expected digits, got {text!r}")
+    return int(text)
+
+
 def _parse_time(tlv: TLV) -> datetime:
-    text = tlv.value.decode("ascii")
+    text = tlv.value.decode("ascii", errors="replace")
     if tlv.tag == der.TAG_UTC_TIME:
         # YYMMDDHHMMSSZ. RFC 5280: years 50..99 => 19xx, 00..49 => 20xx.
-        if not text.endswith("Z"):
-            raise CertParseError("unexpected UTCTime form")
-        yy = int(text[0:2])
+        if len(text) != 13 or not text.endswith("Z"):
+            raise CertParseError(f"UTCTime: malformed value {text!r}")
+        yy = _digits(text[0:2], "UTCTime year")
         year = 1900 + yy if yy >= 50 else 2000 + yy
-        return datetime(
-            year,
-            int(text[2:4]),
-            int(text[4:6]),
-            int(text[6:8]),
-            int(text[8:10]),
-            int(text[10:12]),
-            tzinfo=timezone.utc,
-        )
+        return datetime(year, _digits(text[2:4], "UTCTime month"), _digits(text[4:6], "UTCTime day"),
+                        _digits(text[6:8], "UTCTime hour"), _digits(text[8:10], "UTCTime minute"),
+                        _digits(text[10:12], "UTCTime second"), tzinfo=timezone.utc)
     if tlv.tag == der.TAG_GENERALIZED_TIME:
         # YYYYMMDDHHMMSSZ.
-        if not text.endswith("Z"):
-            raise CertParseError("unexpected GeneralizedTime form")
-        return datetime(
-            int(text[0:4]),
-            int(text[4:6]),
-            int(text[6:8]),
-            int(text[8:10]),
-            int(text[10:12]),
-            int(text[12:14]),
-            tzinfo=timezone.utc,
-        )
+        if len(text) != 15 or not text.endswith("Z"):
+            raise CertParseError(f"GeneralizedTime: malformed value {text!r}")
+        return datetime(_digits(text[0:4], "GeneralizedTime year"), _digits(text[4:6], "GeneralizedTime month"),
+                        _digits(text[6:8], "GeneralizedTime day"), _digits(text[8:10], "GeneralizedTime hour"),
+                        _digits(text[10:12], "GeneralizedTime minute"), _digits(text[12:14], "GeneralizedTime second"),
+                        tzinfo=timezone.utc)
     raise CertParseError(f"unexpected time tag {tlv.tag:#x}")
 
 
